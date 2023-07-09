@@ -5,31 +5,29 @@ function Get-IsRoot {
 }
 
 function Enter-Settings {
-    $port = [int](Read-Host -Prompt "输入 Xray 本地监听地址 (例: 50402) [默认: 随机]")
-    if ($port -eq "") {
-        $port = Get-Random -Maximum 65535 -Minimum 14400
+    $port = Read-Host -Prompt "输入监听端口 (默认: 443)"
+    if ($port -eq "" -or $null -eq $port) {
+        $port = 443
     }
+    $port = [int]$port
     Write-Host "选择: $port"
-    $domain = Read-Host -Prompt "输入已经正确解析的本机域名 (例: example.com)"
-    if ($domain -eq "") {
-        Throw "域名不能为空"
-    }
-    Write-Host "选择: $domain"
-    $email = Read-Host -Prompt "输入域名 TLS 证书的电子邮件地址"
-    if ($email -eq "") {
-        Throw "电子邮件地址不能为空"
-    }
-    Write-Host "选择: $email"
-    $camouflage = Read-Host -Prompt "输入伪装域名 (例: example.com)"
-    if ($camouflage -eq "") {
+
+    $dest = Read-Host -Prompt "输入伪装域名 (例: example.com:443)"
+    if ($dest -eq "" -or $null -eq $dest) {
         Throw "伪装域名不能为空"
     }
-    Write-Host "选择: $camouflage"
+    Write-Host "选择: $dest"
+
+    $sans = Read-Host -Prompt "输入伪装域名的 SAN (详见 README), 以英文逗号分隔"
+    if ($sans -eq "" -or $null -eq $sans) {
+        Throw "伪装域名的 SAN 不能为空"
+    }
+    $sans = $sans.Split(",")
+
     return @{
-        port       = $port
-        domain     = $domain
-        email      = $email
-        camouflage = $camouflage
+        port = $port
+        dest = $dest
+        sans = $sans
     }
 }
 
@@ -39,12 +37,6 @@ function Install-Xray {
     systemctl stop xray
 
     Write-Host "开始安装 Xray..."
-    curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh | bash -s -- install
-    if ($LASTEXITCODE -ne 0) {
-        Throw "Xray 安装失败"
-    }
-    systemctl stop xray
-
     Write-Host "准备 Go 环境..."
     $arch = uname -m
     Write-Host "架构: $arch"
@@ -71,6 +63,8 @@ function Install-Xray {
     go build -o xray -trimpath -ldflags "-s -w -buildid=" ./main
     mv xray /usr/local/bin/xray
     chmod +x /usr/local/bin/xray
+    cp ./xray.service /etc/systemd/system/xray.service
+    systemctl daemon-reload
     Write-Host "Xray 编译成功"
 
     Write-Host "执行清理工作..."
@@ -78,36 +72,6 @@ function Install-Xray {
     rm -rf Xray-core
     rm "$compressedFile"
     Write-Host "Xray 安装成功"
-}
-
-function Install-Caddy {
-    systemctl stop caddy
-
-    Write-Host "开始安装 Caddy..."
-
-    Write-Host "下载 Caddy..."
-    $arch = uname -m
-    Write-Host "架构: $arch"
-    $url = "https://caddyserver.com/api/download?os=linux&arch="
-    switch ($arch) {
-        "x86_64" { $url += "amd64" }
-        "aarch64" { $url += "arm64" }
-        Default { Throw "不支持的架构: $arch" }
-    }
-
-    if (-not (Test-Path /usr/local/bin)) {
-        mkdir -p /usr/local/bin
-    }
-    curl -o /usr/local/bin/caddy $url
-    chmod +x /usr/local/bin/caddy
-    
-    groupadd --system caddy
-    useradd --system --gid caddy --create-home --home-dir /var/lib/caddy --shell /usr/sbin/nologin --comment "Caddy web server" caddy
-    
-    cp ./caddy.service /etc/systemd/system/caddy.service
-    systemctl daemon-reload
-
-    Write-Host "Caddy 安装成功"
 }
 
 function New-x25519-KeyPair {
@@ -188,9 +152,32 @@ function Initialize-Xray {
     $uuid = xray uuid
     $privateKey, $publicKey = New-x25519-KeyPair
     $config = @{
-        inbounds = @(
+        routing   = @{
+            domainStrategy = "IPIfNonMatch"
+            rules          = @(
+                @{
+                    type        = "field"
+                    ip          = @(
+                        "geoip:cn"
+                        "geoip:private"
+                    )
+                    outboundTag = "block"
+                }
+            )
+        }
+        outbounds = @(
             @{
-                listen         = "127.0.0.1"
+                protocol = "freedom"
+                tag      = "direct"
+            }
+            @{
+                protocol = "blackhole"
+                tag      = "block"
+            }
+        )
+        inbounds  = @(
+            @{
+                listen         = "0.0.0.0"
                 port           = $settings["port"]
                 protocol       = "vless"
                 settings       = @{
@@ -206,8 +193,8 @@ function Initialize-Xray {
                     network         = "tcp"
                     security        = "reality"
                     realitySettings = @{
-                        dest        = $settings["camouflage"] + ":443"
-                        serverNames = @( $settings["camouflage"] )
+                        dest        = $settings["dest"]
+                        serverNames = $settings["sans"]
                         privateKey  = $privateKey
                         shortIds    = New-Short-Id-List 4
                     }
@@ -223,28 +210,6 @@ function Initialize-Xray {
     return $uuid, $publicKey
 }
 
-function Initialize-Caddy {
-    param (
-        [Parameter(Mandatory = $true)]
-        $settings
-    )
-
-    $config = ""
-    $config += $settings["domain"] + " {`n"
-    $email = $settings["email"]
-    $config += "    tls $email`n"
-    $config += "    reverse_proxy localhost:" + $settings["port"] + "`n"
-    $config += "}`n"
-
-    if (-not (Test-Path /usr/local/etc/caddy)) {
-        mkdir -p /usr/local/etc/caddy
-    }
-    $config | Out-File /usr/local/etc/caddy/Caddyfile
-    systemctl enable caddy --now
-
-    Write-Host "Caddy 配置成功"
-}
-
 function New-VLESS-ShareLink {
     param (
         [Parameter(Mandatory = $true)]
@@ -255,21 +220,22 @@ function New-VLESS-ShareLink {
         $publicKey
     )
 
+    $ip = (ip route get 8.8.8.8 | sed -n '/src/{s/.*src *\([^ ]*\).*/\1/p;q}' | Out-String).Trim()
     $link = "vless://"
     $link += [uri]::EscapeUriString($uuid)
     $link += "@"
-    $link += $settings["domain"]
-    $link += ":443"
+    $link += $ip
+    $link += ":" + $settings["port"]
     $link += "?"
     $link += "encryption=none&type=tcp"
     $link += "&security=reality"
     $link += "&fp=chrome"
-    $link += "&sni=" + [uri]::EscapeUriString($settings["camouflage"])
+    $link += "&sni=" + [uri]::EscapeUriString($settings["dest"])
     $link += "&pbk=" + [uri]::EscapeUriString($publicKey)
     $link += "&sid=02"
     $link += "&flow=xtls-rprx-vision"
     $link += "&headerType=none"
-    $link += "#" + [uri]::EscapeUriString("rn7s2-" + $settings["domain"])
+    $link += "#" + [uri]::EscapeUriString("rn7s2-" + $ip)
     return $link
 }
 
@@ -282,13 +248,12 @@ function Main {
     Read-Host -Prompt "按 Enter 键开始安装"
 
     Install-Xray
-    Install-Caddy
 
-    $uuid, $publicKey = Initialize-Xray $settings
-    Initialize-Caddy $settings
-    
-    $shareLink = New-VLESS-ShareLink $settings $uuid $publicKey
+    $uuid, $publicKey = Initialize-Xray $settings    
+
+    $shareLink = New-VLESS-ShareLink $settings $uuid $publicKey    
     Write-Host "VLESS 分享链接:`n$shareLink"
+
     $shareLink | Out-File sharelink.txt
     Write-Host "已将分享链接保存到 sharelink.txt"
 
