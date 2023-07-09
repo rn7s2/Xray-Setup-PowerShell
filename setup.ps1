@@ -37,6 +37,12 @@ function Install-Xray {
     systemctl stop xray
 
     Write-Host "开始安装 Xray..."
+    curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh | bash -s -- install
+    if ($LASTEXITCODE -ne 0) {
+        Throw "Xray 安装失败"
+    }
+    systemctl stop xray
+
     Write-Host "准备 Go 环境..."
     $arch = uname -m
     Write-Host "架构: $arch"
@@ -63,7 +69,26 @@ function Install-Xray {
     go build -o xray -trimpath -ldflags "-s -w -buildid=" ./main
     mv xray /usr/local/bin/xray
     chmod +x /usr/local/bin/xray
-    cp ./xray.service /etc/systemd/system/xray.service
+
+    "[Unit]
+Description=Xray Service
+Documentation=https://github.com/xtls
+After=network.target nss-lookup.target
+
+[Service]
+User=root
+Group=root
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ExecStart=/usr/local/bin/xray run -config /usr/local/etc/xray/config.json
+Restart=on-failure
+RestartPreventExitStatus=23
+LimitNPROC=10000
+LimitNOFILE=1000000
+
+[Install]
+WantedBy=multi-user.target" | Out-File /etc/systemd/system/xray.service
     systemctl daemon-reload
     Write-Host "Xray 编译成功"
 
@@ -203,6 +228,9 @@ function Initialize-Xray {
         )
     }
 
+    if (-not (Test-Path /usr/local/etc/xray)) {
+        mkdir /usr/local/etc/xray
+    }
     ConvertTo-Json $config -Depth 5 | Out-File /usr/local/etc/xray/config.json
     systemctl enable xray --now
 
@@ -230,7 +258,7 @@ function New-VLESS-ShareLink {
     $link += "encryption=none&type=tcp"
     $link += "&security=reality"
     $link += "&fp=chrome"
-    $link += "&sni=" + [uri]::EscapeUriString($settings["dest"])
+    $link += "&sni=" + [uri]::EscapeUriString($settings["dest"].Split(":")[0])
     $link += "&pbk=" + [uri]::EscapeUriString($publicKey)
     $link += "&sid=02"
     $link += "&flow=xtls-rprx-vision"
