@@ -18,16 +18,16 @@ function Enter-Settings {
     }
     Write-Host "选择: $dest"
 
-    $sans = Read-Host -Prompt "输入伪装域名的 SAN (详见 README), 以英文逗号分隔"
-    if ($sans -eq "" -or $null -eq $sans) {
-        Throw "伪装域名的 SAN 不能为空"
+    $serverNames = Read-Host -Prompt "输入客户端可用的 ServerName 列表, 以英文逗号分隔"
+    if ($serverNames -eq "" -or $null -eq $serverNames) {
+        Throw "客户端可用的 ServerName 列表不能为空"
     }
-    $sans = $sans.Split(",")
+    $serverNames = $serverNames.Split(",")
 
     return @{
-        port = $port
-        dest = $dest
-        sans = $sans
+        port        = $port
+        dest        = $dest
+        serverNames = $serverNames
     }
 }
 
@@ -224,7 +224,7 @@ function Initialize-Xray {
                     security        = "reality"
                     realitySettings = @{
                         dest        = $settings["dest"]
-                        serverNames = $settings["sans"]
+                        serverNames = $settings["serverNames"]
                         privateKey  = $privateKey
                         shortIds    = New-Short-Id-List 4
                     }
