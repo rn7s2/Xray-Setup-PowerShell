@@ -42,6 +42,7 @@ function Install-Xray {
         Throw "Xray 安装失败"
     }
     systemctl stop xray
+    chown root:root -R /var/log/xray
 
     Write-Host "准备 Go 环境..."
     $arch = uname -m
