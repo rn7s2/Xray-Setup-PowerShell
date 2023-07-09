@@ -177,6 +177,10 @@ function Initialize-Xray {
     $uuid = xray uuid
     $privateKey, $publicKey = New-x25519-KeyPair
     $config = @{
+        log       = @{
+            loglevel = "warning"
+            error    = "/var/log/xray/error.log"
+        }
         routing   = @{
             domainStrategy = "IPIfNonMatch"
             rules          = @(
