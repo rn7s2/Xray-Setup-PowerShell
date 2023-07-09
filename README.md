@@ -2,7 +2,7 @@
 
 在 Linux 服务器上部署 Xray 的 PowerShell 脚本
 
-需要提前安装 pwsh, curl, git.
+需要提前安装 `pwsh`, `curl`, `wget`, `git`, `tar`.
 
 ### 查看目标域名的 SAN
 
