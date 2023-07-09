@@ -187,10 +187,7 @@ function Initialize-Xray {
             rules          = @(
                 @{
                     type        = "field"
-                    ip          = @(
-                        "geoip:cn"
-                        "geoip:private"
-                    )
+                    ip          = @("geoip:private")
                     outboundTag = "block"
                 }
             )
